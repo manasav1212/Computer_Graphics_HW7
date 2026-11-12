@@ -112,9 +112,15 @@ struct HitData {
     float reflectivity;
     bool isLight;
     bool isGlass;
+    float ka;
+    float kd;
+    float ks;
+    float shininess;
 };
 
 const Sphere lightSphere = Sphere(vec3(4.0, 3.0, -4.0), 0.3, vec3(1.0, 1.0, 0.9));
+const Sphere lightSphere2 = Sphere(vec3(-4.0, 3.0, -2.0), 0.3, vec3(0.6, 0.7, 1.0));
+
 Sphere sphere;
 Sphere glassSphere;
 Cube cube;
@@ -163,14 +169,20 @@ bool intersectCube(Ray ray, out float t, out vec3 normal) {
 }
 
 //eta = n1 / n2
-//vec3 refraction(vec3 I, vec3 N, float eta) {
-//    <!-- insert your code here -->
-//}
+vec3 refraction(vec3 I, vec3 N, float eta) {
+  float cosi = dot(-I, N);
+  float k = 1.0 - eta * eta * (1.0 - cosi * cosi);
+  if(k<0.0)
+    return vec3(0.0);
+  return eta * I + (eta * cosi - sqrt(k)) * N;
+}
 
 // Schlick approximation
-//float schlick(float cosine, float ref_idx) {
-//    <!-- insert your code here -->
-//}
+float schlick(float cosine, float ref_idx) {
+  float r0 = (1.0 - ref_idx) / (1.0 + ref_idx);
+  r0 = r0 * r0;
+  return r0 + (1.0 - r0) * pow(1.0 - cosine, 5.0);
+}
 
 bool intersectFloor(Ray ray, out float t) {
     if (abs(ray.direction.y) < 0.0001) return false;
@@ -186,31 +198,55 @@ HitData traceScene(Ray ray, bool includeLight) {
     vec3 n;
 
     if (includeLight && intersectSphere(ray, lightSphere, t) && t < hit.t) {
-        hit = HitData(true, t, ray.origin + ray.direction * t, vec3(0.0), lightSphere.color, 0.0, true, false);
+        hit = HitData(true, t, ray.origin + ray.direction * t, vec3(0.0), lightSphere.color, 0.0, true, false, 1.0, 0.0, 0.0, 1.0);
+    }
+
+    if (includeLight && intersectSphere(ray, lightSphere2, t) && t < hit.t) {
+        hit = HitData(true, t, ray.origin + ray.direction * t, vec3(0.0), lightSphere2.color, 0.0, true, false, 1.0, 0.0, 0.0, 1.0);
     }
 
     if (intersectFloor(ray, t) && t < hit.t) {
         vec3 p = ray.origin + ray.direction * t;
         vec2 cell = floor(p.xz / CHECKER_SIZE);
         vec3 color = mod(cell.x + cell.y, 2.0) < 1.0 ? vec3(1.0) : vec3(0.05);
-        hit = HitData(true, t, p, vec3(0.0, 1.0, 0.0), color, 0.0, false, false);
+        hit = HitData(true, t, p, vec3(0.0, 1.0, 0.0), color, 0.0, false, false, 1.0, 1.0, 0.3, 16.0);
     }
 
     if (intersectCube(ray, t, n) && t < hit.t) {
-        hit = HitData(true, t, ray.origin + ray.direction * t, n, cube.color, cube.reflectivity, false, false);
+        hit = HitData(true, t, ray.origin + ray.direction * t, n, cube.color, cube.reflectivity, false, false, 1.0, 1.0, 0.0, 1.0);
     }
 
     if (intersectSphere(ray, sphere, t) && t < hit.t) {
         vec3 p = ray.origin + ray.direction * t;
-        hit = HitData(true, t, p, (p - sphere.center) / sphere.radius, sphere.color, 0.0, false, false);
+        hit = HitData(true, t, p, (p - sphere.center) / sphere.radius, sphere.color, 0.0, false, false, 1.0, 0.8, 0.6, 32.0);
     }
 
     if (intersectSphere(ray, glassSphere, t) && t < hit.t) {
         vec3 p = ray.origin + ray.direction * t;
-        hit = HitData(true, t, p, (p - glassSphere.center) / glassSphere.radius, glassSphere.color, 0.0, false, true);
+        hit = HitData(true, t, p, (p - glassSphere.center) / glassSphere.radius, glassSphere.color, 0.0, false, true, 1.0, 1.0, 0.0, 1.0);
     }
 
     return hit;
+}
+
+vec3 computeLight(HitData hit, vec3 viewDir, Sphere light)
+{
+  vec3 toLight = light.center - hit.point;
+  float lightDist = length(toLight);
+  vec3 lightDir = toLight / lightDist;
+
+  HitData blocker = traceScene(Ray(hit.point + hit.normal * 0.001, lightDir), false);
+  float visible = blocker.hit && blocker.t < lightDist ? 0.0 : 1.0;
+
+  float diff = max(dot(hit.normal, lightDir), 0.0);
+  float falloff = 1.0 / (1.0 + 0.1 * lightDist * lightDist);
+
+  vec3 reflDir = reflect(-lightDir, hit.normal);
+  float spec = diff > 0.0 ? pow(max(dot(reflDir, viewDir), 0.0), hit.shininess) : 0.0;
+
+  vec3 diffuse = hit.color * hit.kd * diff * light.color;
+  vec3 specular = hit.ks * spec * light.color;
+  return LIGHT_POWER * falloff * visible * (diffuse + specular);
 }
 
 vec3 trace(Ray ray) {
@@ -228,42 +264,63 @@ vec3 trace(Ray ray) {
         }
 
         if (hit.isLight) {
-            color += attenuation * lightSphere.color * LIGHT_POWER;
+           // color += attenuation * lightSphere.color * LIGHT_POWER;
+            color += attenuation * hit.color * LIGHT_POWER;
             break;
         }
 
         // Refraction: (option 1)either reflects or refracts the ray, whichever Schlick says is stronger
         // (option 2): finalColor = hit.color * (F * reflectionColor + (1.0 - F) * refractionColor)
         // (option 3): Monte Carlo Sampling (multiple rays per pixel), reflect with probability F (random() < schlick_value), else refract, and average many samples per pixel
-        //<!-- if (hit.isGlass) {
-        //    <!-- insert your code here -->
+        if (hit.isGlass) {
+          vec3 N = hit.normal;
+          float eta = 1.0 / GLASS_IOR;
+          if(dot(ray.direction, N) > 0.0)
+          {
+            N = -N;
+            eta = GLASS_IOR;
+          }
+          vec3 refr = refract(ray.direction, N, eta);
+          bool total_internal_reflection = dot(refr, refr) == 0.0;
 
-        //    vec3 direction;
-        //    if (total_internal_reflection || schlick_value > 0.5) {
-                //direction = reflection ray
-        //        <!-- insert your code here -->
-        //    } else {
-                //direction = refraction ray
-        //        <!-- insert your code here -->
-        //    }
+          float cosine = (eta < 1.0) ? dot(-ray.direction, N) : dot(refr, -N);
+          vec3 direction;
+          float schlick_value = schlick(cosine, GLASS_IOR);
+          if (total_internal_reflection || schlick_value > 0.5) {
+            direction = reflect(ray.direction, N);
+          } else {
+            direction = refr;
+          }
 
-        //    ray = Ray(hit.point + direction * 0.001, direction);
-        ////Use Schlick approximation to determine contributions from reflection and refraction
-        //    attenuation *= hit.color;
-        //    continue;
-        //}
+          ray = Ray(hit.point + direction * 0.001, direction);
+        //Use Schlick approximation to determine contributions from reflection and refraction
+          attenuation *= hit.color;
+          continue;
+        }
 
-        vec3 toLight = lightSphere.center - hit.point;
-        float lightDist = length(toLight);
-        vec3 lightDir = toLight / lightDist;
+        //vec3 toLight = lightSphere.center - hit.point;
+        //float lightDist = length(toLight);
+        //vec3 lightDir = toLight / lightDist;
 
-        HitData blocker = traceScene(Ray(hit.point + hit.normal * 0.001, lightDir), false);
-        float visible = blocker.hit && blocker.t < lightDist ? 0.0 : 1.0;
-        float diff = max(dot(hit.normal, lightDir), 0.0);
-        float falloff = 1.0 / (1.0 + 0.1 * lightDist * lightDist);
+        //HitData blocker = traceScene(Ray(hit.point + hit.normal * 0.001, lightDir), false);
+        //float visible = blocker.hit && blocker.t < lightDist ? 0.0 : 1.0;
+        //float diff = max(dot(hit.normal, lightDir), 0.0);
+        //float falloff = 1.0 / (1.0 + 0.1 * lightDist * lightDist);
+
+        //vec3 viewDir = -ray.direction;
+        //vec3 reflDir = reflect(-lightDir, hit.normal);
+        //float spec = diff > 0.0 ? pow(max(dot(reflDir, viewDir), 0.0), hit.shininess) : 0.0;
+
+        //vec3 shading = hit.color * (hit.ka * u_ambientStrength + hit.kd * LIGHT_POWER * diff * falloff * visible) 
+        //+ hit.ks * lightSphere.color * LIGHT_POWER * spec * falloff * visible;
 
         //  (optional) Ambient fill light approximates indirect light we don't trace.
-        vec3 shading = hit.color * (LIGHT_POWER * diff * falloff * visible + u_ambientStrength);
+        //vec3 shading = hit.color * (LIGHT_POWER * diff * falloff * visible + u_ambientStrength);
+
+        vec3 viewDir = -ray.direction;
+        vec3 shading = hit.color * hit.ka * u_ambientStrength;
+        shading += computeLight(hit, viewDir, lightSphere);
+        shading += computeLight(hit, viewDir, lightSphere2);
         color += attenuation * shading * (1.0 - hit.reflectivity);
 
         if (hit.reflectivity == 0.0) break;
