@@ -58,6 +58,16 @@
           <input type="range" id="ambient" min="0" max="1" step="0.05" value="0.05">
           <span id="ambientValue">0.5</span>
         </div>
+        <div class="control-row">
+          <label for="refind">Refreactive Index of Glass:</label>
+          <input type="range" id="refind" min="1.0" max="2.5" step="0.05" value="1.5">
+          <span id="refindValue">1.5</span>
+        </div>
+        <div class="control-row">
+          <label for="light">Light Intensity:</label>
+          <input type="range" id="light" min="0.0" max="6.0" step="0.1" value="3.0">
+          <span id="lightValue">3.0</span>
+        </div>
       </div>
     </div>
   </div>
@@ -77,13 +87,15 @@ uniform vec2 u_resolution;
 uniform int u_maxBounces;
 uniform float u_ambientStrength; //Ambient fill light for better visual
 uniform vec2 u_cameraOrbit;
+uniform float u_lightPower;
+uniform float u_glassIOR;
 
 out vec4 fragColor;
 
-const float LIGHT_POWER = 3.0;
+//const float LIGHT_POWER = 3.0;
 const float FLOOR_Y = -2.0;
 const float CHECKER_SIZE = 3.0;
-const float GLASS_IOR = 1.5;  // refractive index of the glass sphere
+//const float GLASS_IOR = 1.5;  // refractive index of the glass sphere
 
 struct Ray {
     vec3 origin;
@@ -246,7 +258,7 @@ vec3 computeLight(HitData hit, vec3 viewDir, Sphere light)
 
   vec3 diffuse = hit.color * hit.kd * diff * light.color;
   vec3 specular = hit.ks * spec * light.color;
-  return LIGHT_POWER * falloff * visible * (diffuse + specular);
+  return u_lightPower * falloff * visible * (diffuse + specular);
 }
 
 vec3 trace(Ray ray) {
@@ -265,7 +277,7 @@ vec3 trace(Ray ray) {
 
         if (hit.isLight) {
            // color += attenuation * lightSphere.color * LIGHT_POWER;
-            color += attenuation * hit.color * LIGHT_POWER;
+            color += attenuation * hit.color * u_lightPower;
             break;
         }
 
@@ -274,18 +286,18 @@ vec3 trace(Ray ray) {
         // (option 3): Monte Carlo Sampling (multiple rays per pixel), reflect with probability F (random() < schlick_value), else refract, and average many samples per pixel
         if (hit.isGlass) {
           vec3 N = hit.normal;
-          float eta = 1.0 / GLASS_IOR;
+          float eta = 1.0 / u_glassIOR;
           if(dot(ray.direction, N) > 0.0)
           {
             N = -N;
-            eta = GLASS_IOR;
+            eta = u_glassIOR;
           }
           vec3 refr = refract(ray.direction, N, eta);
           bool total_internal_reflection = dot(refr, refr) == 0.0;
 
           float cosine = (eta < 1.0) ? dot(-ray.direction, N) : dot(refr, -N);
           vec3 direction;
-          float schlick_value = schlick(cosine, GLASS_IOR);
+          float schlick_value = schlick(cosine, u_glassIOR);
           if (total_internal_reflection || schlick_value > 0.5) {
             direction = reflect(ray.direction, N);
           } else {
@@ -401,7 +413,9 @@ void main() {
 
   const bounces = document.getElementById("bounces");
   const ambient = document.getElementById("ambient");
-  for (const slider of [bounces, ambient]) {
+  const refind = document.getElementById("refind");
+  const light = document.getElementById("light");
+  for (const slider of [bounces, ambient, refind, light]) {
     slider.addEventListener("input", () => document.getElementById(slider.id + "Value").textContent = slider.value);
   }
 
@@ -424,6 +438,8 @@ void main() {
     gl.uniform1i(uniform("u_maxBounces"), bounces.value);
     gl.uniform1f(uniform("u_ambientStrength"), ambient.value);
     gl.uniform2f(uniform("u_cameraOrbit"), pitch, yaw);
+    gl.uniform1f(uniform("u_glassIOR"), refind.value);
+    gl.uniform1f(uniform("u_lightPower"), light.value);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
   requestAnimationFrame(render);
