@@ -55,11 +55,11 @@
         </div>
         <div class="control-row">
           <label for="ambient">Ambient Strength:</label>
-          <input type="range" id="ambient" min="0" max="1" step="0.05" value="0.05">
-          <span id="ambientValue">0.5</span>
+          <input type="range" id="ambient" min="0" max="1" step="0.05" value="0.2">
+          <span id="ambientValue">0.2</span>
         </div>
         <div class="control-row">
-          <label for="refind">Refreactive Index of Glass:</label>
+          <label for="refind">Refractive Index of Glass:</label>
           <input type="range" id="refind" min="1.0" max="2.5" step="0.05" value="1.5">
           <span id="refindValue">1.5</span>
         </div>
@@ -130,22 +130,23 @@ struct HitData {
     float shininess;
 };
 
-const Sphere lightSphere = Sphere(vec3(4.0, 3.0, -4.0), 0.3, vec3(1.0, 1.0, 0.9));
-const Sphere lightSphere2 = Sphere(vec3(-4.0, 3.0, -2.0), 0.3, vec3(0.6, 0.7, 1.0));
+const Sphere lightSphere = Sphere(vec3(4.0, 3.0, -4.0), 0.3, vec3(1.0, 0.6, 0.25));
+const Sphere lightSphere2 = Sphere(vec3(-4.0, 3.0, -2.0), 0.3, vec3(0.4, 0.6, 1.0));
 
 Sphere sphere;
 Sphere glassSphere;
 Cube cube;
 
 void initScene(float time) {
+  vec3 center = vec3(0.0, 0.0, -6.5);
+
     float a = time * 0.5;
-    sphere = Sphere(vec3(cos(a) * 2.5, sin(a * 1.3) * 0.8, -7.0 + sin(a) * 0.5), 1.0, vec3(1.0, 0.3, 0.3));
+    sphere = Sphere(center + vec3(cos(a) * 2.4, sin(a) * 0.4, sin(a) * 2.4), 1.0, vec3(0.9, 0.95, 1.0));
 
     float b = time * 0.3;
-    cube = Cube(vec3(sin(b) * 2.0, cos(b * 1.5) + 0.5, -10.0 + cos(b * 0.7)), 0.8, vec3(0.3, 0.8, 0.3), 0.85);
+    cube = Cube(center + vec3(cos(b) * 4.0, 0.3, sin(b) * 4.0), 0.5, vec3(0.3, 0.8, 0.3), 0.98);
 
-    float c = time * 0.2;
-    glassSphere = Sphere(vec3(0.5 + cos(c * 2.0) * 0.8, 0.0 + sin(c * 1.5) * 0.5, -4.5 + cos(c * 0.7)), 1.0, vec3(0.9, 0.95, 1.0));
+    glassSphere = Sphere(center + vec3(0.0, sin(time * 0.8) * 0.2, 0.0), 1.0, vec3(0.9, 0.95, 1.0));
 }
 
 bool intersectSphere(Ray ray, Sphere s, out float t) {
@@ -261,6 +262,27 @@ vec3 computeLight(HitData hit, vec3 viewDir, Sphere light)
   return u_lightPower * falloff * visible * (diffuse + specular);
 }
 
+vec3 skyColor(vec3 dir)
+{
+  float h = clamp(dir.y, 0.0, 1.0);
+
+  vec3 horizon = vec3(0.9, 0.4, 0.15);
+  vec3 mid = vec3(0.55, 0.2, 0.35);
+  vec3 top = vec3(0.05, 0.08, 0.25);
+
+  vec3 sky = mix(horizon, mid, smoothstep(0.0, 0.25, h));
+  sky = mix(sky, top, smoothstep(0.2, 0.8, h));
+
+  vec3 sunDir = normalize(vec3(0.3, 0.12, -1.0));
+  float align = max(dot(dir, sunDir), 0.0);
+  float glow = pow(align, 32.0);
+  float disk = smoothstep(0.995, 0.999, align);
+
+  sky += vec3(1.0, 0.55, 0.25) * glow * 0.6;
+  sky += vec3(1.0, 0.9, 0.7) * disk * 2.0;
+  return sky;
+}
+
 vec3 trace(Ray ray) {
     vec3 color = vec3(0.0);
     vec3 attenuation = vec3(1.0);
@@ -270,8 +292,9 @@ vec3 trace(Ray ray) {
         HitData hit = traceScene(ray, true);
 
         if (!hit.hit) {
-            float t = 0.5 * (ray.direction.y + 1.0);
-            color += attenuation * mix(vec3(0.09, 0.12, 0.18), vec3(0.18, 0.21, 0.27), t);  // sky
+            //float t = 0.5 * (ray.direction.y + 1.0);
+            //color += attenuation * mix(vec3(0.09, 0.12, 0.18), vec3(0.18, 0.21, 0.27), t);  // sky
+            color += attenuation * skyColor(ray.direction);
             break;
         }
 
@@ -292,7 +315,7 @@ vec3 trace(Ray ray) {
             N = -N;
             eta = u_glassIOR;
           }
-          vec3 refr = refract(ray.direction, N, eta);
+          vec3 refr = refraction(ray.direction, N, eta);
           bool total_internal_reflection = dot(refr, refr) == 0.0;
 
           float cosine = (eta < 1.0) ? dot(-ray.direction, N) : dot(refr, -N);
